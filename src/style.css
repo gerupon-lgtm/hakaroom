@@ -154,10 +154,14 @@ main {
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
 }
 
-/* 記録ボタン: 右手・左手どちらの片手持ちでも親指が届くよう左右両隅に複製配置 */
+/*
+ * 記録ボタン: 右手・左手どちらの片手持ちでも親指が届くよう左右両隅に複製配置。
+ * Androidが全画面表示終了のジェスチャー案内バナーを画面最下部に出すことがあり、
+ * bottomを0に近い値にすると重なって押せなくなるため、十分な余白(5rem)を空ける。
+ */
 .xr-record {
   position: absolute;
-  bottom: env(safe-area-inset-bottom, 1.25rem);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 5rem);
   width: 88px;
   height: 88px;
   border-radius: 50%;
