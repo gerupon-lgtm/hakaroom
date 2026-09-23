@@ -25,6 +25,8 @@ export interface TwoPointResult {
   distanceMeters: number;
   points: Point3D[];
   referenceSpaceType: 'local-floor' | 'local';
+  /** 端末の入力欄でその場で入力した実測値(メートル)。未入力ならnull。 */
+  actualDistanceMeters: number | null;
 }
 
 export interface TwoPointPrototypeOptions {
@@ -59,6 +61,10 @@ export async function runTwoPointDistancePrototype(
       <div class="xr-secondary-controls">
         <button type="button" class="xr-reset" id="xr-reset-1">測り直す</button>
         <button type="button" class="xr-exit" id="xr-exit-1">終了</button>
+      </div>
+      <div class="xr-actual-input-row" id="xr-actual-input-row" hidden>
+        <input type="text" inputmode="decimal" id="xr-actual-input" placeholder="実測値(m)・任意" />
+        <button type="button" id="xr-confirm-actual">記録して次へ</button>
       </div>
     </div>
     <div class="xr-crosshair" aria-hidden="true"></div>
@@ -190,6 +196,11 @@ export async function runTwoPointDistancePrototype(
   const recordButtons = overlay.querySelectorAll<HTMLButtonElement>('.xr-record');
   const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset-1')!;
   // 終了ボタン(#xr-exit-1)は初期化開始前に既に配線済み(exitButtonImmediate)のため、ここでは再登録しない
+  const actualInputRow = overlay.querySelector<HTMLDivElement>('#xr-actual-input-row')!;
+  const actualInput = overlay.querySelector<HTMLInputElement>('#xr-actual-input')!;
+  const confirmActualButton = overlay.querySelector<HTMLButtonElement>('#xr-confirm-actual')!;
+
+  let pendingResult: { distanceMeters: number; points: Point3D[] } | null = null;
 
   function recordPoint(): void {
     if (!latestHitPosition || points.length >= 2) return;
@@ -205,8 +216,24 @@ export async function runTwoPointDistancePrototype(
         }
       }
       statusEl.textContent = message;
-      onResult({ distanceMeters, points: [...points], referenceSpaceType });
+      // window.prompt()はブロッキングダイアログで、表示するとARセッションが
+      // 強制終了されてしまう(実機で確認)。ARを抜けずに実測値を入力できるよう、
+      // DOM Overlay内のインライン入力欄をここで表示する。
+      pendingResult = { distanceMeters, points: [...points] };
+      actualInputRow.hidden = false;
+      actualInput.value = '';
+      actualInput.focus();
     }
+  }
+
+  function confirmActualDistance(): void {
+    if (!pendingResult) return;
+    const parsed = actualInput.value.trim() === '' ? null : Number.parseFloat(actualInput.value);
+    const actualDistanceMeters = parsed !== null && !Number.isNaN(parsed) ? parsed : null;
+    onResult({ ...pendingResult, referenceSpaceType, actualDistanceMeters });
+    pendingResult = null;
+    actualInputRow.hidden = true;
+    resetPoints();
   }
 
   /**
@@ -217,6 +244,8 @@ export async function runTwoPointDistancePrototype(
    */
   function resetPoints(): void {
     points = [];
+    pendingResult = null;
+    actualInputRow.hidden = true;
     countEls.forEach((el) => (el.textContent = '0'));
     statusEl.textContent = latestHitPosition ? '床を検出しました。画面中央を狙って「記録」' : '追跡中…';
   }
@@ -227,6 +256,7 @@ export async function runTwoPointDistancePrototype(
   overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
   recordButtons.forEach((button) => button.addEventListener('click', recordPoint));
   resetButton.addEventListener('click', resetPoints);
+  confirmActualButton.addEventListener('click', confirmActualDistance);
   xrSession.addEventListener('end', cleanup);
 
   function onXRFrame(_time: number, frame: XRFrame): void {

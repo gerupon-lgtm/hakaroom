@@ -58,7 +58,7 @@ hakaroom/
 ## バージョン管理
 
 - 形式: `hakaroom-MAJOR.MINOR.PATCH`
-- 現在版: `hakaroom-0.4.0`（正典は `src/version.ts`。この節の値は更新を忘れがちなので、変更時は必ず両方直す）
+- 現在版: `hakaroom-0.4.1`（正典は `src/version.ts`。この節の値は更新を忘れがちなので、変更時は必ず両方直す）
 - 増分: PATCH=小修正 / MINOR=後方互換のある機能追加・中規模変更 / MAJOR=破壊的・大規模変更
 - リセット: MINOR更新時はPATCH=0、MAJOR更新時はMINOR=0かつPATCH=0
 - 正典: `src/version.ts` の `export const APP_VERSION = 'hakaroom-0.1.0'`
@@ -93,10 +93,13 @@ hakaroom/
 
 ## 変更禁止事項（根拠つき）
 
-（現時点ではまだ実装・検証を経た確定事項が無いため空。検証や試行錯誤で確定した事項が出た時点で、根拠（テスト名・資料）とともにここへ追記する）
+- **immersive-arセッション中に `window.alert`/`prompt`/`confirm` 等のブロッキングダイアログを呼ばない**。実機検証で `window.prompt()` を呼ぶとセッションが強制終了することを確認した（下記「検証済みの事実」参照）。値の入力が必要な場合は、DOM Overlay内のHTML要素（`<input>`等）で完結させる（`src/ar/webxr-native/two-point-prototype.ts` の `xr-actual-input-row` を参照）
 
 ## 検証済みの事実
 
+| 事実 | 検証方法 | 根拠 | 確認日 |
+|------|----------|------|--------|
+| immersive-arセッション中に `window.prompt()` を呼ぶとセッションが強制終了する | 実機(Pixel 6a / Android Chrome)でAR中に2点計測完了後 `window.prompt()` を呼び出し、ARが終了して呼び出し元の画面に戻ることを確認 | ユーザー報告＋実装での再現・修正（`window.prompt`をDOM Overlay内input要素に置換） | 2026-09-23 |
 | 事実 | 検証方法 | 根拠 | 確認日 |
 |------|----------|------|--------|
 | （未実施） | — | — | — |

@@ -18,6 +18,8 @@ import { INIT_TIMEOUT_MS, InitTimeoutError, withTimeout } from '../with-timeout'
 export interface TwoPointResultThreeJs {
   distanceMeters: number;
   points: Point3D[];
+  /** 端末の入力欄でその場で入力した実測値(メートル)。未入力ならnull。 */
+  actualDistanceMeters: number | null;
 }
 
 export async function runTwoPointDistancePrototypeThreeJs(
@@ -38,6 +40,10 @@ export async function runTwoPointDistancePrototypeThreeJs(
       <div class="xr-secondary-controls">
         <button type="button" id="xr-reset-1">測り直す</button>
         <button type="button" id="xr-exit-1">終了</button>
+      </div>
+      <div class="xr-actual-input-row" id="xr-actual-input-row" hidden>
+        <input type="text" inputmode="decimal" id="xr-actual-input" placeholder="実測値(m)・任意" />
+        <button type="button" id="xr-confirm-actual">記録して次へ</button>
       </div>
     </div>
   `;
@@ -142,6 +148,10 @@ export async function runTwoPointDistancePrototypeThreeJs(
 
   const statusEl = overlay.querySelector<HTMLElement>('#xr-status')!;
   const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset-1')!;
+  const actualInputRow = overlay.querySelector<HTMLDivElement>('#xr-actual-input-row')!;
+  const actualInput = overlay.querySelector<HTMLInputElement>('#xr-actual-input')!;
+  const confirmActualButton = overlay.querySelector<HTMLButtonElement>('#xr-confirm-actual')!;
+  let pendingResult: { distanceMeters: number; points: Point3D[] } | null = null;
 
   let points: Point3D[] = [];
   const markerGeometry = new THREE.SphereGeometry(0.02, 16, 16);
@@ -167,6 +177,8 @@ export async function runTwoPointDistancePrototypeThreeJs(
 
   function resetPoints(): void {
     points = [];
+    pendingResult = null;
+    actualInputRow.hidden = true;
     markers.forEach((m) => scene.remove(m));
     markers = [];
     if (connectingLine) {
@@ -176,8 +188,19 @@ export async function runTwoPointDistancePrototypeThreeJs(
     statusEl.textContent = '画面をタップして1点目を記録してください';
   }
 
+  function confirmActualDistance(): void {
+    if (!pendingResult) return;
+    const parsed = actualInput.value.trim() === '' ? null : Number.parseFloat(actualInput.value);
+    const actualDistanceMeters = parsed !== null && !Number.isNaN(parsed) ? parsed : null;
+    onResult({ ...pendingResult, actualDistanceMeters });
+    pendingResult = null;
+    actualInputRow.hidden = true;
+    resetPoints();
+  }
+
   overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
   resetButton.addEventListener('click', resetPoints);
+  confirmActualButton.addEventListener('click', confirmActualDistance);
   xrSession.addEventListener('end', () => {
     renderer.setAnimationLoop(null);
     cleanup();
@@ -211,7 +234,11 @@ export async function runTwoPointDistancePrototypeThreeJs(
       drawLine(points[0], points[1]);
       const distanceMeters = euclideanDistance3D(points[0], points[1]);
       statusEl.textContent = `距離: ${distanceMeters.toFixed(3)} m`;
-      onResult({ distanceMeters, points: [...points] });
+      // window.prompt()はARセッションを強制終了させるため使わない(native版と同じ教訓)。
+      pendingResult = { distanceMeters, points: [...points] };
+      actualInputRow.hidden = false;
+      actualInput.value = '';
+      actualInput.focus();
     }
   });
 

@@ -142,6 +142,33 @@ main {
   color: #fff;
 }
 
+/*
+ * 実測値の入力はwindow.prompt()を使わない(ブロッキングダイアログでARセッションが
+ * 強制終了されることを実機で確認したため)。DOM Overlay内のこの行で完結させる。
+ */
+.xr-actual-input-row:not([hidden]) {
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.xr-actual-input-row input {
+  width: 6rem;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+  border-radius: 0.5rem;
+  border: none;
+}
+
+.xr-actual-input-row button {
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: #1565c0;
+  color: #fff;
+}
+
 .xr-crosshair {
   position: absolute;
   top: 50%;

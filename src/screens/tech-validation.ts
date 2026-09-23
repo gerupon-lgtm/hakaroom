@@ -42,20 +42,16 @@ export function renderTechValidation(container: HTMLElement): void {
     referenceSpaceType: TrialRecord['referenceSpaceType'],
     measuredDistance: number,
     points: Point3D[],
+    actualDistance: number | null,
   ): void {
-    const actualInput = window.prompt(
-      `計測距離: ${measuredDistance.toFixed(3)} m（${method} / ${referenceSpaceType} / ${interaction}）\nメジャー等で測った実際の距離（メートル）を入力してください（未計測なら空欄でOK）`,
-    );
-    const actualDistance = actualInput ? Number.parseFloat(actualInput) : null;
-    const validActual = actualDistance !== null && !Number.isNaN(actualDistance) ? actualDistance : null;
-    const errorMeters = validActual !== null ? measuredDistance - validActual : null;
+    const errorMeters = actualDistance !== null ? measuredDistance - actualDistance : null;
 
     trials.push({
       method,
       referenceSpaceType,
       interaction,
       measuredDistance,
-      actualDistance: validActual,
+      actualDistance,
       errorMeters,
       points,
       recordedAt: new Date().toISOString(),
@@ -67,14 +63,30 @@ export function renderTechValidation(container: HTMLElement): void {
   container.querySelector<HTMLButtonElement>('#start-local-floor')!.addEventListener('click', () => {
     void runTwoPointDistancePrototype(
       container,
-      (result) => recordTrial('webxr-native', 'クロスヘア+ボタン', result.referenceSpaceType, result.distanceMeters, result.points),
+      (result) =>
+        recordTrial(
+          'webxr-native',
+          'クロスヘア+ボタン',
+          result.referenceSpaceType,
+          result.distanceMeters,
+          result.points,
+          result.actualDistanceMeters,
+        ),
       { preferLocalFloor: true },
     );
   });
   container.querySelector<HTMLButtonElement>('#start-local')!.addEventListener('click', () => {
     void runTwoPointDistancePrototype(
       container,
-      (result) => recordTrial('webxr-native', 'クロスヘア+ボタン', result.referenceSpaceType, result.distanceMeters, result.points),
+      (result) =>
+        recordTrial(
+          'webxr-native',
+          'クロスヘア+ボタン',
+          result.referenceSpaceType,
+          result.distanceMeters,
+          result.points,
+          result.actualDistanceMeters,
+        ),
       { preferLocalFloor: false },
     );
   });
@@ -82,7 +94,7 @@ export function renderTechValidation(container: HTMLElement): void {
     // three.js(500KB超)は技術検証Bを使う人だけが読み込めばよいため動的importにする
     void import('../ar/threejs/two-point-prototype').then(({ runTwoPointDistancePrototypeThreeJs }) =>
       runTwoPointDistancePrototypeThreeJs(container, (result) =>
-        recordTrial('threejs', 'タップ即記録', 'local', result.distanceMeters, result.points),
+        recordTrial('threejs', 'タップ即記録', 'local', result.distanceMeters, result.points, result.actualDistanceMeters),
       ),
     );
   });
