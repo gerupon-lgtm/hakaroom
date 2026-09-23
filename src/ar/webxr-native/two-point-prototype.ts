@@ -33,9 +33,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+export interface TwoPointResult {
+  distanceMeters: number;
+  points: Point3D[];
+  referenceSpaceType: 'local-floor' | 'local';
+}
+
+export interface TwoPointPrototypeOptions {
+  /**
+   * true: local-floorを優先し、非対応なら'local'にフォールバックする。
+   * false: 最初から'local'のみを使う。
+   * local-floor導入後に精度が悪化した疑いがあるため、A/B比較用に選べるようにしている。
+   */
+  preferLocalFloor: boolean;
+}
+
 export async function runTwoPointDistancePrototype(
   hostElement: HTMLElement,
-  onResult: (result: { distanceMeters: number; points: Point3D[] }) => void,
+  onResult: (result: TwoPointResult) => void,
+  options: TwoPointPrototypeOptions = { preferLocalFloor: true },
 ): Promise<void> {
   const xr = navigator.xr;
   if (!xr) {
@@ -147,10 +163,15 @@ export async function runTwoPointDistancePrototype(
 
   let referenceSpace: XRReferenceSpace;
   let referenceSpaceType: 'local-floor' | 'local';
-  try {
-    referenceSpace = await xrSession.requestReferenceSpace('local-floor');
-    referenceSpaceType = 'local-floor';
-  } catch {
+  if (options.preferLocalFloor) {
+    try {
+      referenceSpace = await xrSession.requestReferenceSpace('local-floor');
+      referenceSpaceType = 'local-floor';
+    } catch {
+      referenceSpace = await xrSession.requestReferenceSpace('local');
+      referenceSpaceType = 'local';
+    }
+  } else {
     referenceSpace = await xrSession.requestReferenceSpace('local');
     referenceSpaceType = 'local';
   }
@@ -196,7 +217,7 @@ export async function runTwoPointDistancePrototype(
         }
       }
       statusEl.textContent = message;
-      onResult({ distanceMeters, points: [...points] });
+      onResult({ distanceMeters, points: [...points], referenceSpaceType });
     }
   }
 
