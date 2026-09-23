@@ -99,8 +99,11 @@ export async function runTwoPointDistancePrototype(
     }
   }
 
+  // DOM Overlay上のボタン操作がARの'select'イベントとしても発火し、
+  // 1回のタップでrecordPointが二重に呼ばれる(=1タップで2点とも記録される)
+  // 問題を防ぐ。'select'では記録せず、明示的なボタンのクリックのみで記録する。
+  overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
   recordButton.addEventListener('click', recordPoint);
-  session.addEventListener('select', recordPoint);
   exitButton.addEventListener('click', () => session.end());
   session.addEventListener('end', cleanup);
 
