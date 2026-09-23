@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/webxr": "^0.5.24",
     "jsdom": "^25.0.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",

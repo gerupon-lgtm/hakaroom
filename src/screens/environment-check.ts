@@ -14,14 +14,14 @@ export function renderEnvironmentCheck(container: HTMLElement, onAvailable: () =
         onAvailable();
         return;
       }
-      renderUnavailable(container, result.reason ?? '不明な理由により利用できません。');
+      renderUnavailable(container, result.reason ?? '不明な理由により利用できません。', onAvailable);
     })
     .catch(() => {
-      renderUnavailable(container, '対応環境の確認中にエラーが発生しました。');
+      renderUnavailable(container, '対応環境の確認中にエラーが発生しました。', onAvailable);
     });
 }
 
-function renderUnavailable(container: HTMLElement, reason: string): void {
+function renderUnavailable(container: HTMLElement, reason: string, onAvailable: () => void): void {
   container.innerHTML = `
     <p class="status status-ng">この端末・ブラウザでは利用できません。</p>
     <p class="reason">${escapeHtml(reason)}</p>
@@ -29,9 +29,7 @@ function renderUnavailable(container: HTMLElement, reason: string): void {
   `;
   const button = container.querySelector<HTMLButtonElement>('#recheck');
   button?.addEventListener('click', () => {
-    renderEnvironmentCheck(container, () => {
-      /* 再チェック時のonAvailableはmain.ts側の初期化フローに委ねる */
-    });
+    renderEnvironmentCheck(container, onAvailable);
   });
 }
 
