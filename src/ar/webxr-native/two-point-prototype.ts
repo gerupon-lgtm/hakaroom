@@ -27,6 +27,13 @@ export interface TwoPointResult {
   referenceSpaceType: 'local-floor' | 'local';
   /** 端末の入力欄でその場で入力した実測値(メートル)。未入力ならnull。 */
   actualDistanceMeters: number | null;
+  /**
+   * この計測がキャリブレーション（縮尺補正係数を設定した回）かどうか。
+   * キャリブレーション回は「補正後の値」を実測値と比較する意味がないためnullになる。
+   */
+  isCalibration: boolean;
+  /** 縮尺補正係数(実測値/生の計測値)が設定済みの場合の補正後距離。未設定ならnull。 */
+  correctedDistanceMeters: number | null;
 }
 
 export interface TwoPointPrototypeOptions {
@@ -58,8 +65,10 @@ export async function runTwoPointDistancePrototype(
     <div class="xr-top-bar">
       <p class="xr-status" id="xr-status">初期化中…</p>
       <p class="xr-refspace" id="xr-refspace"></p>
+      <p class="xr-refspace" id="xr-calibration"></p>
       <div class="xr-secondary-controls">
         <button type="button" class="xr-reset" id="xr-reset-1">測り直す</button>
+        <button type="button" id="xr-clear-calibration">キャリブレーション解除</button>
         <button type="button" class="xr-exit" id="xr-exit-1">終了</button>
       </div>
       <div class="xr-actual-input-row" id="xr-actual-input-row" hidden>
@@ -199,8 +208,29 @@ export async function runTwoPointDistancePrototype(
   const actualInputRow = overlay.querySelector<HTMLDivElement>('#xr-actual-input-row')!;
   const actualInput = overlay.querySelector<HTMLInputElement>('#xr-actual-input')!;
   const confirmActualButton = overlay.querySelector<HTMLButtonElement>('#xr-confirm-actual')!;
+  const calibrationEl = overlay.querySelector<HTMLElement>('#xr-calibration')!;
+  const clearCalibrationButton = overlay.querySelector<HTMLButtonElement>('#xr-clear-calibration')!;
 
   let pendingResult: { distanceMeters: number; points: Point3D[] } | null = null;
+  /**
+   * 縮尺補正係数(実測値/生の計測値)。要件定義書F-011の「基準距離の入力」に相当する
+   * 最も単純なハイブリッド方式の検証: セッション内で最初に実測値を入力した回を
+   * キャリブレーションとして扱い、以後の計測にこの係数を掛けて補正値を出す。
+   */
+  let scaleFactor: number | null = null;
+
+  function updateCalibrationLabel(): void {
+    calibrationEl.textContent =
+      scaleFactor === null
+        ? 'キャリブレーション: 未設定（最初の実測値入力が基準になります）'
+        : `キャリブレーション: 設定済み（補正係数 ×${scaleFactor.toFixed(4)}）`;
+  }
+  updateCalibrationLabel();
+
+  clearCalibrationButton.addEventListener('click', () => {
+    scaleFactor = null;
+    updateCalibrationLabel();
+  });
 
   function recordPoint(): void {
     if (!latestHitPosition || points.length >= 2) return;
@@ -208,7 +238,10 @@ export async function runTwoPointDistancePrototype(
     countEls.forEach((el) => (el.textContent = String(points.length)));
     if (points.length === 2) {
       const distanceMeters = euclideanDistance3D(points[0], points[1]);
-      let message = `距離: ${distanceMeters.toFixed(3)} m`;
+      let message = `距離(生値): ${distanceMeters.toFixed(3)} m`;
+      if (scaleFactor !== null) {
+        message += ` ／補正後: ${(distanceMeters * scaleFactor).toFixed(3)} m`;
+      }
       if (referenceSpaceType === 'local-floor') {
         const heightDiff = Math.abs(points[0].y - points[1].y);
         if (heightDiff > HEIGHT_MISMATCH_WARNING_METERS) {
@@ -230,7 +263,27 @@ export async function runTwoPointDistancePrototype(
     if (!pendingResult) return;
     const parsed = actualInput.value.trim() === '' ? null : Number.parseFloat(actualInput.value);
     const actualDistanceMeters = parsed !== null && !Number.isNaN(parsed) ? parsed : null;
-    onResult({ ...pendingResult, referenceSpaceType, actualDistanceMeters });
+
+    let isCalibration = false;
+    let correctedDistanceMeters: number | null = null;
+    if (scaleFactor === null) {
+      // この回でキャリブレーションを設定する(実測値が無ければ設定できず、補正なしのまま)
+      if (actualDistanceMeters !== null && pendingResult.distanceMeters > 0) {
+        scaleFactor = actualDistanceMeters / pendingResult.distanceMeters;
+        isCalibration = true;
+        updateCalibrationLabel();
+      }
+    } else {
+      correctedDistanceMeters = pendingResult.distanceMeters * scaleFactor;
+    }
+
+    onResult({
+      ...pendingResult,
+      referenceSpaceType,
+      actualDistanceMeters,
+      isCalibration,
+      correctedDistanceMeters,
+    });
     pendingResult = null;
     actualInputRow.hidden = true;
     resetPoints();
