@@ -111,6 +111,13 @@ main {
   font-size: 0.9rem;
 }
 
+.xr-overlay .xr-refspace {
+  margin: 0 0.75rem;
+  align-self: center;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .xr-crosshair {
   position: absolute;
   top: 50%;

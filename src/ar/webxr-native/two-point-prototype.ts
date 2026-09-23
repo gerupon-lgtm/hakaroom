@@ -11,7 +11,15 @@ import type { Point3D } from '../../types';
  *
  * hit testの基準空間には 'viewer'（画面中心から前方へのレイ）を使う。
  * つまり画面中央に十字マーカーを重ね、狙った床の点をタップして記録する。
+ *
+ * 参照空間は可能なら 'local-floor'（重力方向にY軸を揃え、Y=0を床面とする）
+ * を使う。これにより、床が最初に一度検出できればその後は画面に映り続けなくても
+ * トラッキングは継続し、また2点の高さ(Y座標)が実際に一致しているかを
+ * 判定できるようになる。'local-floor'が使えない端末では'local'にフォールバック
+ * する（その場合、高さの判定はできない旨を表示する）。
  */
+const HEIGHT_MISMATCH_WARNING_METERS = 0.05;
+
 export async function runTwoPointDistancePrototype(
   hostElement: HTMLElement,
   onResult: (result: { distanceMeters: number; points: Point3D[] }) => void,
@@ -26,6 +34,7 @@ export async function runTwoPointDistancePrototype(
   overlay.className = 'xr-overlay';
   overlay.innerHTML = `
     <p class="xr-status" id="xr-status">初期化中…</p>
+    <p class="xr-refspace" id="xr-refspace"></p>
     <div class="xr-crosshair" aria-hidden="true"></div>
     <div class="xr-controls">
       <button type="button" id="xr-record">記録（<span id="xr-count">0</span>/2）</button>
@@ -55,7 +64,7 @@ export async function runTwoPointDistancePrototype(
   try {
     session = await xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test', 'local'],
-      optionalFeatures: ['dom-overlay'],
+      optionalFeatures: ['dom-overlay', 'local-floor'],
       domOverlay: { root: overlay },
     });
   } catch (error) {
@@ -67,9 +76,23 @@ export async function runTwoPointDistancePrototype(
   await gl.makeXRCompatible();
   await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
 
-  const referenceSpace = await session.requestReferenceSpace('local');
+  let referenceSpace: XRReferenceSpace;
+  let referenceSpaceType: 'local-floor' | 'local';
+  try {
+    referenceSpace = await session.requestReferenceSpace('local-floor');
+    referenceSpaceType = 'local-floor';
+  } catch {
+    referenceSpace = await session.requestReferenceSpace('local');
+    referenceSpaceType = 'local';
+  }
   const viewerSpace = await session.requestReferenceSpace('viewer');
   const requestedHitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
+
+  const refSpaceEl = overlay.querySelector<HTMLElement>('#xr-refspace')!;
+  refSpaceEl.textContent =
+    referenceSpaceType === 'local-floor'
+      ? '参照空間: local-floor（高さの判定が可能）'
+      : '参照空間: local（この端末では高さの一致判定はできません）';
 
   if (!requestedHitTestSource) {
     cleanup();
@@ -96,7 +119,14 @@ export async function runTwoPointDistancePrototype(
     countEl.textContent = String(points.length);
     if (points.length === 2) {
       const distanceMeters = euclideanDistance3D(points[0], points[1]);
-      statusEl.textContent = `距離: ${distanceMeters.toFixed(3)} m`;
+      let message = `距離: ${distanceMeters.toFixed(3)} m`;
+      if (referenceSpaceType === 'local-floor') {
+        const heightDiff = Math.abs(points[0].y - points[1].y);
+        if (heightDiff > HEIGHT_MISMATCH_WARNING_METERS) {
+          message += ` ／⚠高さの差 ${(heightDiff * 100).toFixed(1)}cm（2点の高さが揃っていない可能性）`;
+        }
+      }
+      statusEl.textContent = message;
       onResult({ distanceMeters, points: [...points] });
     }
   }
