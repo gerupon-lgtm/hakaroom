@@ -29,6 +29,7 @@ export async function runTwoPointDistancePrototype(
     <div class="xr-crosshair" aria-hidden="true"></div>
     <div class="xr-controls">
       <button type="button" id="xr-record">記録（<span id="xr-count">0</span>/2）</button>
+      <button type="button" id="xr-reset">測り直す</button>
       <button type="button" id="xr-exit">終了</button>
     </div>
   `;
@@ -80,12 +81,13 @@ export async function runTwoPointDistancePrototype(
   const glContext = gl;
   const hitTestSource = requestedHitTestSource;
 
-  const points: Point3D[] = [];
+  let points: Point3D[] = [];
   let latestHitPosition: Point3D | null = null;
 
   const statusEl = overlay.querySelector<HTMLElement>('#xr-status')!;
   const countEl = overlay.querySelector<HTMLElement>('#xr-count')!;
   const recordButton = overlay.querySelector<HTMLButtonElement>('#xr-record')!;
+  const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset')!;
   const exitButton = overlay.querySelector<HTMLButtonElement>('#xr-exit')!;
 
   function recordPoint(): void {
@@ -99,11 +101,24 @@ export async function runTwoPointDistancePrototype(
     }
   }
 
+  /**
+   * ARセッション(=トラッキング)を維持したまま測点だけをリセットする。
+   * セッションを終了・再開すると毎回トラッキングが初期化されてしまい、
+   * 「同一セッション内でトラッキングが安定していくか」を検証できないため、
+   * 記録のやり直しは終了・再開ではなくこのリセットで行う。
+   */
+  function resetPoints(): void {
+    points = [];
+    countEl.textContent = '0';
+    statusEl.textContent = latestHitPosition ? '床を検出しました。画面中央を狙って「記録」' : '追跡中…';
+  }
+
   // DOM Overlay上のボタン操作がARの'select'イベントとしても発火し、
   // 1回のタップでrecordPointが二重に呼ばれる(=1タップで2点とも記録される)
   // 問題を防ぐ。'select'では記録せず、明示的なボタンのクリックのみで記録する。
   overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
   recordButton.addEventListener('click', recordPoint);
+  resetButton.addEventListener('click', resetPoints);
   exitButton.addEventListener('click', () => session.end());
   session.addEventListener('end', cleanup);
 
