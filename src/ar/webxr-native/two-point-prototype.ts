@@ -19,6 +19,19 @@ import type { Point3D } from '../../types';
  * する（その場合、高さの判定はできない旨を表示する）。
  */
 const HEIGHT_MISMATCH_WARNING_METERS = 0.05;
+/** 初期化(requestSession等)がこの時間内に終わらなければタイムアウトとして中断する。 */
+const INIT_TIMEOUT_MS = 15000;
+
+class InitTimeoutError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new InitTimeoutError(`${ms}ms以内に完了しませんでした`)), ms);
+    }),
+  ]);
+}
 
 export async function runTwoPointDistancePrototype(
   hostElement: HTMLElement,
@@ -63,6 +76,22 @@ export async function runTwoPointDistancePrototype(
     canvas.remove();
   };
 
+  // 初期化(requestSession等)が途中で固まっても必ず抜けられるよう、
+  // 「終了」ボタンは初期化の完了を待たずに最初から機能させる。
+  // sessionはこの時点ではまだ存在しないので、生成され次第上書きする。
+  let session: XRSession | null = null;
+  const exitButtonImmediate = overlay.querySelector<HTMLButtonElement>('#xr-exit-1')!;
+  let cancelled = false;
+  exitButtonImmediate.addEventListener('click', () => {
+    cancelled = true;
+    if (session) {
+      void session.end();
+    } else {
+      cleanup();
+      hostElement.textContent = 'キャンセルしました。もう一度お試しください。';
+    }
+  });
+
   const gl = canvas.getContext('webgl', { xrCompatible: true });
   if (!gl) {
     cleanup();
@@ -70,33 +99,63 @@ export async function runTwoPointDistancePrototype(
     return;
   }
 
-  let session: XRSession;
+  // タイムアウト後にrequestSessionが遅れて成功した場合、カメラを握ったまま
+  // 誰にも参照されないセッションが残ってしまう(リソースリーク)ため、
+  // その場合は即座に終了させる。
+  let timedOut = false;
+  const sessionPromise = xr.requestSession('immersive-ar', {
+    requiredFeatures: ['hit-test', 'local'],
+    optionalFeatures: ['dom-overlay', 'local-floor'],
+    domOverlay: { root: overlay },
+  });
+  sessionPromise
+    .then((lateSession) => {
+      if (timedOut || cancelled) void lateSession.end();
+    })
+    .catch(() => undefined);
+
   try {
-    session = await xr.requestSession('immersive-ar', {
-      requiredFeatures: ['hit-test', 'local'],
-      optionalFeatures: ['dom-overlay', 'local-floor'],
-      domOverlay: { root: overlay },
-    });
+    session = await withTimeout(sessionPromise, INIT_TIMEOUT_MS);
   } catch (error) {
+    if (error instanceof InitTimeoutError) timedOut = true;
+    if (cancelled) return; // ユーザーが「終了」で既にキャンセル済み
     cleanup();
-    hostElement.textContent = `ARセッションを開始できませんでした: ${(error as Error).message}`;
+    hostElement.textContent =
+      error instanceof InitTimeoutError
+        ? 'ARセッションの開始がタイムアウトしました。Androidの全画面案内表示が影響している可能性があります。少し待ってからもう一度お試しください。'
+        : `ARセッションを開始できませんでした: ${(error as Error).message}`;
     return;
   }
+  if (cancelled) {
+    void session.end();
+    return;
+  }
+  // クロージャ内でのnull narrowingのため、非nullが確定した値を別変数に固定する
+  const xrSession: XRSession = session;
 
-  await gl.makeXRCompatible();
-  await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  try {
+    await withTimeout(gl.makeXRCompatible(), INIT_TIMEOUT_MS);
+    await withTimeout(xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) }), INIT_TIMEOUT_MS);
+  } catch (error) {
+    if (!cancelled) {
+      cleanup();
+      hostElement.textContent = `WebGLの初期化に失敗しました: ${(error as Error).message}`;
+      void xrSession.end().catch(() => undefined);
+    }
+    return;
+  }
 
   let referenceSpace: XRReferenceSpace;
   let referenceSpaceType: 'local-floor' | 'local';
   try {
-    referenceSpace = await session.requestReferenceSpace('local-floor');
+    referenceSpace = await xrSession.requestReferenceSpace('local-floor');
     referenceSpaceType = 'local-floor';
   } catch {
-    referenceSpace = await session.requestReferenceSpace('local');
+    referenceSpace = await xrSession.requestReferenceSpace('local');
     referenceSpaceType = 'local';
   }
-  const viewerSpace = await session.requestReferenceSpace('viewer');
-  const requestedHitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
+  const viewerSpace = await xrSession.requestReferenceSpace('viewer');
+  const requestedHitTestSource = await xrSession.requestHitTestSource?.({ space: viewerSpace });
 
   const refSpaceEl = overlay.querySelector<HTMLElement>('#xr-refspace')!;
   refSpaceEl.textContent =
@@ -106,7 +165,7 @@ export async function runTwoPointDistancePrototype(
 
   if (!requestedHitTestSource) {
     cleanup();
-    await session.end().catch(() => undefined);
+    await xrSession.end().catch(() => undefined);
     hostElement.textContent = 'Hit Test機能を初期化できませんでした。';
     return;
   }
@@ -121,7 +180,7 @@ export async function runTwoPointDistancePrototype(
   const countEls = overlay.querySelectorAll<HTMLElement>('.xr-count');
   const recordButtons = overlay.querySelectorAll<HTMLButtonElement>('.xr-record');
   const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset-1')!;
-  const exitButton = overlay.querySelector<HTMLButtonElement>('#xr-exit-1')!;
+  // 終了ボタン(#xr-exit-1)は初期化開始前に既に配線済み(exitButtonImmediate)のため、ここでは再登録しない
 
   function recordPoint(): void {
     if (!latestHitPosition || points.length >= 2) return;
@@ -159,14 +218,13 @@ export async function runTwoPointDistancePrototype(
   overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
   recordButtons.forEach((button) => button.addEventListener('click', recordPoint));
   resetButton.addEventListener('click', resetPoints);
-  exitButton.addEventListener('click', () => session.end());
-  session.addEventListener('end', cleanup);
+  xrSession.addEventListener('end', cleanup);
 
   function onXRFrame(_time: number, frame: XRFrame): void {
-    session.requestAnimationFrame(onXRFrame);
+    xrSession.requestAnimationFrame(onXRFrame);
 
     const pose = frame.getViewerPose(referenceSpace);
-    const glLayer = session.renderState.baseLayer;
+    const glLayer = xrSession.renderState.baseLayer;
     if (!pose || !glLayer) {
       statusEl.textContent = '追跡中…';
       return;
@@ -196,5 +254,5 @@ export async function runTwoPointDistancePrototype(
     }
   }
 
-  session.requestAnimationFrame(onXRFrame);
+  xrSession.requestAnimationFrame(onXRFrame);
 }
