@@ -32,15 +32,25 @@ export async function runTwoPointDistancePrototype(
 
   const overlay = document.createElement('div');
   overlay.className = 'xr-overlay';
+  // 記録ボタンは右手・左手どちらの片手持ちでも親指が届くよう、
+  // 画面下の左右両隅に同じ機能のボタンを複製配置する（技術検証段階の暫定措置）。
+  // 測り直す/終了は使用頻度が低いため、邪魔にならない上部にまとめる。
   overlay.innerHTML = `
-    <p class="xr-status" id="xr-status">初期化中…</p>
-    <p class="xr-refspace" id="xr-refspace"></p>
-    <div class="xr-crosshair" aria-hidden="true"></div>
-    <div class="xr-controls">
-      <button type="button" id="xr-record">記録（<span id="xr-count">0</span>/2）</button>
-      <button type="button" id="xr-reset">測り直す</button>
-      <button type="button" id="xr-exit">終了</button>
+    <div class="xr-top-bar">
+      <p class="xr-status" id="xr-status">初期化中…</p>
+      <p class="xr-refspace" id="xr-refspace"></p>
+      <div class="xr-secondary-controls">
+        <button type="button" class="xr-reset" id="xr-reset-1">測り直す</button>
+        <button type="button" class="xr-exit" id="xr-exit-1">終了</button>
+      </div>
     </div>
+    <div class="xr-crosshair" aria-hidden="true"></div>
+    <button type="button" class="xr-record xr-record-left" id="xr-record-left">
+      記録<br>(<span class="xr-count">0</span>/2)
+    </button>
+    <button type="button" class="xr-record xr-record-right" id="xr-record-right">
+      記録<br>(<span class="xr-count">0</span>/2)
+    </button>
   `;
   document.body.appendChild(overlay);
 
@@ -108,15 +118,15 @@ export async function runTwoPointDistancePrototype(
   let latestHitPosition: Point3D | null = null;
 
   const statusEl = overlay.querySelector<HTMLElement>('#xr-status')!;
-  const countEl = overlay.querySelector<HTMLElement>('#xr-count')!;
-  const recordButton = overlay.querySelector<HTMLButtonElement>('#xr-record')!;
-  const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset')!;
-  const exitButton = overlay.querySelector<HTMLButtonElement>('#xr-exit')!;
+  const countEls = overlay.querySelectorAll<HTMLElement>('.xr-count');
+  const recordButtons = overlay.querySelectorAll<HTMLButtonElement>('.xr-record');
+  const resetButton = overlay.querySelector<HTMLButtonElement>('#xr-reset-1')!;
+  const exitButton = overlay.querySelector<HTMLButtonElement>('#xr-exit-1')!;
 
   function recordPoint(): void {
     if (!latestHitPosition || points.length >= 2) return;
     points.push({ ...latestHitPosition });
-    countEl.textContent = String(points.length);
+    countEls.forEach((el) => (el.textContent = String(points.length)));
     if (points.length === 2) {
       const distanceMeters = euclideanDistance3D(points[0], points[1]);
       let message = `距離: ${distanceMeters.toFixed(3)} m`;
@@ -139,7 +149,7 @@ export async function runTwoPointDistancePrototype(
    */
   function resetPoints(): void {
     points = [];
-    countEl.textContent = '0';
+    countEls.forEach((el) => (el.textContent = '0'));
     statusEl.textContent = latestHitPosition ? '床を検出しました。画面中央を狙って「記録」' : '追跡中…';
   }
 
@@ -147,7 +157,7 @@ export async function runTwoPointDistancePrototype(
   // 1回のタップでrecordPointが二重に呼ばれる(=1タップで2点とも記録される)
   // 問題を防ぐ。'select'では記録せず、明示的なボタンのクリックのみで記録する。
   overlay.addEventListener('beforexrselect', (event) => event.preventDefault());
-  recordButton.addEventListener('click', recordPoint);
+  recordButtons.forEach((button) => button.addEventListener('click', recordPoint));
   resetButton.addEventListener('click', resetPoints);
   exitButton.addEventListener('click', () => session.end());
   session.addEventListener('end', cleanup);
