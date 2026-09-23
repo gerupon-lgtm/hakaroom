@@ -1,5 +1,6 @@
 import { euclideanDistance3D } from '../../geometry/distance';
 import type { Point3D } from '../../types';
+import { INIT_TIMEOUT_MS, InitTimeoutError, withTimeout } from '../with-timeout';
 
 /**
  * T-003 技術検証: 素のWebXR Device APIのみで2点間距離を計測するプロトタイプ。
@@ -19,19 +20,6 @@ import type { Point3D } from '../../types';
  * する（その場合、高さの判定はできない旨を表示する）。
  */
 const HEIGHT_MISMATCH_WARNING_METERS = 0.05;
-/** 初期化(requestSession等)がこの時間内に終わらなければタイムアウトとして中断する。 */
-const INIT_TIMEOUT_MS = 15000;
-
-class InitTimeoutError extends Error {}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new InitTimeoutError(`${ms}ms以内に完了しませんでした`)), ms);
-    }),
-  ]);
-}
 
 export interface TwoPointResult {
   distanceMeters: number;
