@@ -89,6 +89,30 @@ export interface VerificationRecord {
   editedAt: string | null;
 }
 
+/** 撮影時の傾き。elevationDegは光軸の水平からの角度（真下=-90、水平=0）、rollDegは光軸まわりの回転。 */
+export interface TiltInfo {
+  elevationDeg: number;
+  rollDeg: number;
+  sampleCount: number;
+  elevationStdDevDeg: number;
+}
+
+/** 写真方式の写真（docs/data-model.md「PhotoRecord」）。IndexedDBに保存する。 */
+export interface PhotoRecord {
+  id: string;
+  blob: Blob;
+  source: 'in-app-camera' | 'gallery';
+  width: number;
+  height: number;
+  originalWidth: number;
+  originalHeight: number;
+  focalLength35mm: number | null;
+  tilt: TiltInfo | null;
+  capturedAt: string; // ISO8601, UTC
+  processing: { longSidePx: number; quality: number; grayscale: boolean };
+  byteSize: number;
+}
+
 export interface StorageRoot {
   schemaVersion: number;
   currentSession: MeasurementSession | null;

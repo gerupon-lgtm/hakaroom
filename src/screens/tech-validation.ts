@@ -35,6 +35,7 @@ export function renderTechValidation(container: HTMLElement): void {
       <button type="button" id="start-local-floor">技術検証A: 素のWebXR（local-floor優先／クロスヘア+ボタン）</button>
       <button type="button" id="start-local">技術検証A: 素のWebXR（localのみ／クロスヘア+ボタン）</button>
       <button type="button" id="start-threejs">技術検証B: Three.js（local固定／タップ即記録）</button>
+      <button type="button" id="start-photo-lab">技術検証D: 写真方式（撮影・傾きセンサー）</button>
       <div id="trial-list"></div>
     </section>
   `;
@@ -111,6 +112,10 @@ export function renderTechValidation(container: HTMLElement): void {
         recordTrial('threejs', 'タップ即記録', 'local', result.distanceMeters, result.points, result.actualDistanceMeters),
       ),
     );
+  });
+
+  container.querySelector<HTMLButtonElement>('#start-photo-lab')!.addEventListener('click', () => {
+    void import('./photo-lab').then(({ renderPhotoLab }) => renderPhotoLab(container));
   });
 
   renderTrialList(container.querySelector<HTMLElement>('#trial-list')!);

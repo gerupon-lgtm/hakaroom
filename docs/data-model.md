@@ -92,6 +92,26 @@ interface StorageRoot {
 - 検証記録は完了後も編集・個別削除が可能（確定）。削除は取り消し不可（Undo無し、確定）
 - `verificationRecords` は最大100件（暫定値、要件定義書20章 No.10）。追加時に100件を超える場合は `measuredAt` が最も古いものから削除する（FIFO、確定）
 
+## PhotoRecord（写真。写真方式F-021/F-022。IndexedDBに保存）
+
+localStorageのJSONとは別に、IndexedDB（DB名 `hakaroom-photos`、ストア `photos`）へ保存する。写真は容量が大きいため。サーバー送信はしない（C-01）。
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| id | string (uuid) | ◯ | 写真ID |
+| blob | Blob (image/webp) | ◯ | 解析用に縮小・グレースケール化した画像。元画像は保存しない |
+| source | `'in-app-camera'` \| `'gallery'` | ◯ | アプリ内撮影か取り込みか |
+| width / height | number | ◯ | 保存した画像のピクセル寸法 |
+| originalWidth / originalHeight | number | ◯ | 縮小前のピクセル寸法（縮小率の逆算に使う。EXIFは再エンコードで消えるため別保存） |
+| focalLength35mm | number \| null | — | 35mm換算焦点距離。取得できなければ null（設定値や推定で補う） |
+| tilt | `{ pitchDeg; rollDeg; source: 'devicemotion' \| 'deviceorientation'; sampleCount; stdDevDeg } \| null` | — | 撮影時の傾き（重力方向）。アプリ内撮影のみ。取り込み写真は null |
+| capturedAt | string (ISO8601, UTC) | ◯ | 撮影日時 |
+| processing | `{ longSidePx; quality; grayscale }` | ◯ | 縮小・圧縮の設定（検証中に変更可能なため記録） |
+| byteSize | number | ◯ | blobのバイト数（合計上限の集計用） |
+
+- 写真の合計サイズ上限は200MB。超えたら `capturedAt` の古い写真から削除する（測定値の記録は残す）。検証記録・セッションからは `photoId` で参照する
+- `navigator.storage.persist()` で永続ストレージを要求する（自動削除の防止）
+
 ## リレーション
 
 - `MeasurementSession` 1 - N `MeasurementPoint` / `ReferenceObjectPlacement` / `CorrespondencePoint`（セッションに従属、セッション削除で連動して破棄）
