@@ -154,7 +154,8 @@ export function renderPhotoLab(container: HTMLElement): void {
   }
 
   captureButton.addEventListener('click', () => {
-    const tilt = sensor.snapshot(); // シャッターを押した瞬間の傾きを先に確保する
+    const snapshot = sensor.snapshot(); // シャッターを押した瞬間の傾きを先に確保する
+    const tilt = snapshot ? { ...snapshot, screenAngleDeg: screen.orientation?.angle ?? 0 } : null;
     captureButton.disabled = true;
     void (async () => {
       try {

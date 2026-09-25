@@ -95,6 +95,8 @@ export interface TiltInfo {
   rollDeg: number;
   sampleCount: number;
   elevationStdDevDeg: number;
+  /** 撮影時の画面の向き(screen.orientation.angle)。取得できなければ未設定。 */
+  screenAngleDeg?: number;
 }
 
 /** 写真方式の写真（docs/data-model.md「PhotoRecord」）。IndexedDBに保存する。 */

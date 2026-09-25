@@ -263,3 +263,15 @@ main {
   width: 100%;
   display: block;
 }
+
+/* 技術検証D: 写真上で測る */
+.pm-canvas {
+  width: 100%;
+  display: block;
+  touch-action: manipulation;
+  margin: 0.5rem 0;
+}
+
+.pm-known {
+  width: 4.5rem;
+}
