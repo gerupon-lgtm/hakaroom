@@ -58,7 +58,7 @@ hakaroom/
 ## バージョン管理
 
 - 形式: `hakaroom-MAJOR.MINOR.PATCH`
-- 現在版: `hakaroom-0.8.1`（正典は `src/version.ts`。この節の値は更新を忘れがちなので、変更時は必ず両方直す）
+- 現在版: `hakaroom-0.8.2`（正典は `src/version.ts`。この節の値は更新を忘れがちなので、変更時は必ず両方直す）
 - 増分: PATCH=小修正 / MINOR=後方互換のある機能追加・中規模変更 / MAJOR=破壊的・大規模変更
 - リセット: MINOR更新時はPATCH=0、MAJOR更新時はMINOR=0かつPATCH=0
 - 正典: `src/version.ts` の `export const APP_VERSION = 'hakaroom-0.1.0'`

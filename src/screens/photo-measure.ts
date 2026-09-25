@@ -237,7 +237,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
         const bm = b === null ? null : b / 1000;
         return `<tr>
           <td>${i + 1}</td>
-          <td>${s.role === 'reference' ? '基準' : '測定'}</td>
+          <td><select data-i="${i}" class="pm-role"><option value="measure"${s.role === 'measure' ? ' selected' : ''}>測定</option><option value="reference"${s.role === 'reference' ? ' selected' : ''}>基準</option></select></td>
           <td><input data-i="${i}" class="pm-known" type="text" inputmode="decimal" value="${s.knownM ?? ''}" placeholder="実測m" /></td>
           <td>${fmt(a)}${errText(a, s.knownM)}</td>
           <td>${fmt(bm)}${errText(bm, s.knownM)}</td>
@@ -262,6 +262,12 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       input.addEventListener('change', () => {
         const v = Number.parseFloat(input.value);
         w.segments[Number(input.dataset.i)].knownM = Number.isNaN(v) ? null : v;
+        redraw();
+      });
+    });
+    container.querySelectorAll<HTMLSelectElement>('.pm-role').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        w.segments[Number(sel.dataset.i)].role = sel.value === 'reference' ? 'reference' : 'measure';
         redraw();
       });
     });
