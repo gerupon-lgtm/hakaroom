@@ -40,6 +40,20 @@ describe('upVectorInCamera', () => {
   it('真下を向くと、上向きは光軸の後ろ(-z)', () => {
     expect(upVectorInCamera(-90, 0).z).toBeCloseTo(-1, 9);
   });
+
+  // 実機（Pixel 6a）: 端末の上端を左に倒した横持ちで screen.orientation.angle=90、ロール≈+90。
+  // 保存される画像は景色が正立しているので、上向きは画像の上(-y)になるはず。
+  it('横持ち（画面の向き90°、ロール+90°）でも、上向きは画像の上(-y)', () => {
+    const up = upVectorInCamera(0, 90, 90);
+    expect(up.x).toBeCloseTo(0, 9);
+    expect(up.y).toBeCloseTo(-1, 9);
+  });
+
+  it('横持ち（画面の向き270°、ロール-90°）でも、上向きは画像の上(-y)', () => {
+    const up = upVectorInCamera(0, -90, 270);
+    expect(up.x).toBeCloseTo(0, 9);
+    expect(up.y).toBeCloseTo(-1, 9);
+  });
 });
 
 describe('方式A: 傾き+焦点距離による水平面の距離', () => {

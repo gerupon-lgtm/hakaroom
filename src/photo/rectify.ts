@@ -41,8 +41,9 @@ const normalize = (a: Vec3): Vec3 => scale(a, 1 / norm(a));
 
 /**
  * 撮影時の仰角・ロール（src/photo/tilt.ts と同じ定義）から、カメラ座標系での「上向き」ベクトルを返す。
- * rotationDegは、画像が端末の縦持ち姿勢に対して何度回っているか（0/90/180/270）。
- * 縦持ちで撮った画像は0。横持ちの場合の符号は実機で確認する（ガイド線で目視確認できる）。
+ * rotationDegは撮影時の screen.orientation.angle（0/90/180/270）。画像は景色が正立して保存される前提。
+ * 90（端末の上端を左に倒した横持ち）では、画像の右=端末の-y、画像の下=端末の-x になる。
+ * 実機（Pixel 6a、v0.8.2）で、以前の逆符号では鉛直ガイド線が実際の柱と逆に傾き、距離が大きく縮んだ。
  */
 export function upVectorInCamera(elevationDeg: number, rollDeg: number, rotationDeg = 0): Vec3 {
   const e = (elevationDeg * Math.PI) / 180;
@@ -54,7 +55,8 @@ export function upVectorInCamera(elevationDeg: number, rollDeg: number, rotation
   const x0 = ux;
   const y0 = -uy;
   const z0 = -uz;
-  const t = (rotationDeg * Math.PI) / 180;
+  // 画面が反時計回りに回った分だけ、カメラ座標を逆向き（時計回り）に回す
+  const t = (-rotationDeg * Math.PI) / 180;
   return { x: x0 * Math.cos(t) - y0 * Math.sin(t), y: x0 * Math.sin(t) + y0 * Math.cos(t), z: z0 };
 }
 
