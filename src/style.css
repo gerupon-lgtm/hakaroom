@@ -275,3 +275,18 @@ main {
 .pm-known {
   width: 4.5rem;
 }
+
+.pm-wrap {
+  position: relative;
+}
+
+.pm-loupe {
+  position: absolute;
+  top: 0;
+  width: 150px;
+  height: 150px;
+  border: 2px solid #ffeb3b;
+  border-radius: 50%;
+  background: #000;
+  pointer-events: none;
+}
