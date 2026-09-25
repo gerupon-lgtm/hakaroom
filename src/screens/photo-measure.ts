@@ -39,7 +39,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
   container.innerHTML = `
     <section class="photo-measure">
       <h2>技術検証D: 写真上で測る</h2>
-      <p class="note">写真に指を置くと、指の上（オフセット）に十字の照準と拡大鏡が出ます。照準を狙いの位置に合わせて指を離すと確定します。同じ平面上の辺だけが対象です。</p>
+      <p class="note">写真をタップすると十字の照準が置かれます。画面をドラッグすると、指の動きの一部だけ照準が動くので、拡大鏡を見ながら微調整し、「確定」で決定します。置いた点は、近くをもう一度タップすると動かし直せます。同じ平面上の辺だけが対象です。</p>
       <div class="photo-actions"><select id="pm-photo"></select></div>
       <div class="photo-settings">
         <label>画像の回転 <select id="pm-rot"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></select></label>
@@ -52,17 +52,21 @@ export function renderPhotoMeasure(container: HTMLElement): void {
         <button type="button" id="pm-add-measure">測定の線分を追加（2点）</button>
         <button type="button" id="pm-add-a4">A4の4隅を指定</button>
         <label>A4の最初の辺 <select id="pm-a4edge"><option value="auto">自動（画像上で長い辺=長辺）</option><option value="long">長辺(297)</option><option value="short">短辺(210)</option></select></label>
-        <button type="button" id="pm-edit">点を微調整（ドラッグ）</button>
+        <button type="button" id="pm-undo">直前を取り消す</button>
         <button type="button" id="pm-clear">この写真の指定を全消去</button>
       </div>
       <div class="photo-settings">
-        <label>照準のオフセット <select id="pm-offset"><option value="90">指の上90px</option><option value="140" selected>指の上140px</option><option value="60">指の上60px</option><option value="0">なし</option></select></label>
+        <label>微調整の速さ <select id="pm-gain"><option value="0.2">かなり細かい</option><option value="0.4" selected>細かい</option><option value="0.8">標準</option></select></label>
         <label>拡大鏡 <select id="pm-zoom"><option value="3">3倍</option><option value="4" selected>4倍</option><option value="6">6倍</option></select></label>
       </div>
       <p id="pm-status" class="note"></p>
       <div class="pm-wrap">
         <canvas id="pm-canvas" class="pm-canvas"></canvas>
         <canvas id="pm-loupe" class="pm-loupe" width="300" height="300" hidden></canvas>
+      </div>
+      <div id="pm-bar" class="pm-bar" hidden>
+        <button type="button" id="pm-cancel">取消</button>
+        <button type="button" id="pm-confirm">確定</button>
       </div>
       <div id="pm-info" class="note"></div>
       <div id="pm-table"></div>
@@ -78,9 +82,11 @@ export function renderPhotoMeasure(container: HTMLElement): void {
   let photos: PhotoRecord[] = [];
   let current: PhotoRecord | null = null;
   let bitmap: ImageBitmap | null = null;
-  let mode: 'idle' | 'segment' | 'a4' | 'edit' = 'idle';
+  let mode: 'idle' | 'segment' | 'a4' = 'idle';
+  /** 仮置き中の照準位置(画像座標)。確定または取消までは点として扱わない。 */
   let aim: Vec2 | null = null;
-  let dragHandle: { get(): Vec2; set(p: Vec2): void } | null = null;
+  let editHandle: { get(): Vec2; set(p: Vec2): void } | null = null;
+  let history: ('segment' | 'a4')[] = [];
   let pendingRole: Segment['role'] = 'measure';
   let pending: Vec2[] = [];
 
@@ -107,6 +113,8 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     $<HTMLInputElement>('pm-focal').value = String(w.focal35mm);
     mode = 'idle';
     pending = [];
+    history = [];
+    aim = null;
     statusEl.textContent = current.tilt ? '' : 'この写真は傾きセンサー値が無いため、方式A（傾き補正）は使えません（方式BのA4のみ）';
     redraw();
   }
@@ -128,7 +136,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     if (!current || !bitmap || !w) return;
     canvas.width = current.width;
     canvas.height = current.height;
-    canvas.style.touchAction = mode === 'idle' ? 'auto' : 'none';
+    canvas.style.touchAction = aim ? 'none' : 'auto'; // 仮置き中だけ、ドラッグでページがスクロールしないようにする
     ctx.drawImage(bitmap, 0, 0, current.width, current.height);
     const c = camera()!;
 
@@ -267,24 +275,19 @@ export function renderPhotoMeasure(container: HTMLElement): void {
 
   const loupe = $<HTMLCanvasElement>('pm-loupe');
   const loupeCtx = loupe.getContext('2d')!;
+  const bar = $('pm-bar');
   const cssScale = () => canvas.width / canvas.getBoundingClientRect().width; // 画像px / CSSpx
+  type Handle = { get(): Vec2; set(p: Vec2): void };
+  let tentative: { confirm(): void; cancel(): void } | null = null;
+  let loupeOnRight = true;
+  let lastPointer: { x: number; y: number } | null = null;
 
-  /** 指の位置から、オフセット分だけ上の照準位置(画像座標)を返す。 */
-  function aimFrom(event: PointerEvent): Vec2 {
-    const rect = canvas.getBoundingClientRect();
-    const k = cssScale();
-    const offsetCss = Number.parseFloat($<HTMLSelectElement>('pm-offset').value);
-    return {
-      x: Math.min(canvas.width, Math.max(0, (event.clientX - rect.left) * k)),
-      y: Math.min(canvas.height, Math.max(0, (event.clientY - rect.top - offsetCss) * k)),
-    };
-  }
-
-  function drawLoupe(fingerClientX: number): void {
+  function drawLoupe(): void {
     if (!aim || !bitmap || !current) return;
     const zoom = Number.parseFloat($<HTMLSelectElement>('pm-zoom').value);
     const loupeCss = loupe.getBoundingClientRect().width || 150;
-    const src = (loupeCss * cssScale()) / zoom; // 拡大鏡が映す元画像の幅(画像px)
+    const k = cssScale();
+    const src = (loupeCss * k) / zoom; // 拡大鏡が映す元画像の幅(画像px)
     loupeCtx.clearRect(0, 0, loupe.width, loupe.height);
     loupeCtx.drawImage(bitmap, aim.x - src / 2, aim.y - src / 2, src, src, 0, 0, loupe.width, loupe.height);
     loupeCtx.strokeStyle = '#ffeb3b';
@@ -301,18 +304,21 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     loupeCtx.moveTo(c, c + gap);
     loupeCtx.lineTo(c, loupe.height);
     loupeCtx.stroke();
-    // 指が隠さないよう、指と反対側の上隅に表示する
+    // 拡大鏡は上隅に固定し、照準が近づいたときだけ反対側へ移す（動き回らないようにする）
     const rect = canvas.getBoundingClientRect();
-    const fingerOnLeft = fingerClientX - rect.left < rect.width / 2;
-    loupe.style.left = fingerOnLeft ? 'auto' : '0';
-    loupe.style.right = fingerOnLeft ? '0' : 'auto';
+    const ax = aim.x / k;
+    const ay = aim.y / k;
+    const x0 = loupeOnRight ? rect.width - loupeCss : 0;
+    if (ay < loupeCss + 30 && ax > x0 - 30 && ax < x0 + loupeCss + 30) loupeOnRight = !loupeOnRight;
+    loupe.style.left = loupeOnRight ? 'auto' : '0';
+    loupe.style.right = loupeOnRight ? '0' : 'auto';
     loupe.hidden = false;
   }
 
-  function findHandle(at: Vec2): { get(): Vec2; set(p: Vec2): void } | null {
+  function findHandle(at: Vec2): Handle | null {
     const w = work();
     if (!w) return null;
-    const list: { get(): Vec2; set(p: Vec2): void }[] = [];
+    const list: Handle[] = [];
     for (const seg of w.segments) {
       list.push({ get: () => seg.p1, set: (p) => (seg.p1 = p) }, { get: () => seg.p2, set: (p) => (seg.p2 = p) });
     }
@@ -320,9 +326,8 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       const t = w.target;
       t.corners.forEach((_, i) => list.push({ get: () => t.corners[i], set: (p) => (t.corners[i] = p) }));
     }
-    const limit = 40 * cssScale(); // 照準から40CSSpx以内の点だけ掴む
-    let best: { get(): Vec2; set(p: Vec2): void } | null = null;
-    let bestDist = limit;
+    let best: Handle | null = null;
+    let bestDist = 40 * cssScale(); // タップ位置から40CSSpx以内の点だけ選べる
     for (const h of list) {
       const d = Math.hypot(h.get().x - at.x, h.get().y - at.y);
       if (d < bestDist) {
@@ -333,69 +338,128 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     return best;
   }
 
+  function beginTentative(at: Vec2, confirm: () => void, cancel: () => void): void {
+    aim = at;
+    tentative = { confirm, cancel };
+    bar.hidden = false;
+    redraw();
+    drawLoupe();
+  }
+
+  function endTentative(): void {
+    aim = null;
+    tentative = null;
+    editHandle = null;
+    lastPointer = null;
+    bar.hidden = true;
+    loupe.hidden = true;
+    redraw();
+  }
+
+  function commitPending(p: Vec2): void {
+    const w = work();
+    if (!w) return;
+    pending.push(p);
+    if (mode === 'segment' && pending.length === 2) {
+      w.segments.push({ p1: pending[0], p2: pending[1], role: pendingRole, knownM: null });
+      history.push('segment');
+      pending = [];
+      mode = 'idle';
+      statusEl.textContent = '';
+    } else if (mode === 'a4' && pending.length === 4) {
+      w.target = { corners: pending };
+      history.push('a4');
+      pending = [];
+      mode = 'idle';
+      statusEl.textContent = '';
+    } else {
+      statusEl.textContent =
+        mode === 'a4' ? `A4の角を順にたどって指定（${pending.length}/4）。次の角をタップ` : '2点目の位置をタップしてください';
+    }
+  }
+
+  // タップ: 指定中なら照準を置く。指定中でなければ、近くの既存の点を選んで動かし直す。
+  canvas.addEventListener('click', (event) => {
+    if (!work() || tentative) return;
+    const rect = canvas.getBoundingClientRect();
+    const k = cssScale();
+    const at = { x: (event.clientX - rect.left) * k, y: (event.clientY - rect.top) * k };
+    if (mode === 'segment' || mode === 'a4') {
+      beginTentative(at, () => commitPending(aim!), () => undefined);
+      statusEl.textContent = 'ドラッグで微調整し、「確定」を押してください';
+    } else {
+      const handle = findHandle(at);
+      if (!handle) return;
+      const original = { ...handle.get() };
+      editHandle = handle;
+      beginTentative(original, () => undefined, () => handle.set(original));
+      statusEl.textContent = '点を動かし直しています。ドラッグで微調整し、「確定」または「取消」を押してください';
+    }
+  });
+
+  // ドラッグ: 指の動きの一部だけ照準を動かす（絶対位置へは飛ばない）
   canvas.addEventListener('pointerdown', (event) => {
-    if (mode === 'idle' || !work()) return;
+    if (!tentative) return;
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
-    aim = aimFrom(event);
-    if (mode === 'edit') {
-      dragHandle = findHandle(aim);
-      if (!dragHandle) {
-        aim = null;
-        statusEl.textContent = '動かしたい点の近くに照準を合わせてください（指はその下に置きます）';
-        return;
-      }
-    }
-    redraw();
-    drawLoupe(event.clientX);
+    lastPointer = { x: event.clientX, y: event.clientY };
   });
-
   canvas.addEventListener('pointermove', (event) => {
-    if (!aim) return;
+    if (!tentative || !lastPointer || !aim) return;
     event.preventDefault();
-    aim = aimFrom(event);
-    dragHandle?.set(aim);
+    const gain = Number.parseFloat($<HTMLSelectElement>('pm-gain').value);
+    const k = cssScale();
+    aim = {
+      x: Math.min(canvas.width, Math.max(0, aim.x + (event.clientX - lastPointer.x) * k * gain)),
+      y: Math.min(canvas.height, Math.max(0, aim.y + (event.clientY - lastPointer.y) * k * gain)),
+    };
+    lastPointer = { x: event.clientX, y: event.clientY };
+    editHandle?.set(aim);
     redraw();
-    drawLoupe(event.clientX);
+    drawLoupe();
   });
+  const stopDrag = () => {
+    lastPointer = null;
+  };
+  canvas.addEventListener('pointerup', stopDrag);
+  canvas.addEventListener('pointercancel', stopDrag);
 
-  const endAim = (commit: boolean) => {
+  $('pm-confirm').addEventListener('click', () => {
+    const t = tentative;
+    if (!t) return;
+    t.confirm();
+    endTentative();
+  });
+  $('pm-cancel').addEventListener('click', () => {
+    const t = tentative;
+    if (!t) return;
+    t.cancel();
+    statusEl.textContent = mode === 'idle' ? '' : statusEl.textContent;
+    endTentative();
+  });
+  $('pm-undo').addEventListener('click', () => {
     const w = work();
-    loupe.hidden = true;
-    if (!aim || !w) {
-      aim = null;
+    if (!w) return;
+    if (tentative) {
+      $('pm-cancel').click();
       return;
     }
-    const placed = aim;
-    aim = null;
-    if (mode === 'edit') {
-      dragHandle = null;
-    } else if (commit) {
-      pending.push(placed);
-      if (mode === 'segment' && pending.length === 2) {
-        w.segments.push({ p1: pending[0], p2: pending[1], role: pendingRole, knownM: null });
-        pending = [];
-        mode = 'idle';
-        statusEl.textContent = '';
-      } else if (mode === 'a4' && pending.length === 4) {
-        w.target = { corners: pending };
-        pending = [];
-        mode = 'idle';
-        statusEl.textContent = '';
-      } else {
-        statusEl.textContent = mode === 'a4' ? `A4の角を順にたどって指定（${pending.length}/4）` : '2点目を指定してください';
-      }
+    if (pending.length > 0) {
+      pending.pop();
+      statusEl.textContent = '直前の点を取り消しました';
+    } else {
+      const last = history.pop();
+      if (last === 'segment') w.segments.pop();
+      else if (last === 'a4') w.target = null;
     }
     redraw();
-  };
-  canvas.addEventListener('pointerup', () => endAim(true));
-  canvas.addEventListener('pointercancel', () => endAim(false));
+  });
 
   const startSegment = (role: Segment['role']) => {
     mode = 'segment';
     pendingRole = role;
     pending = [];
-    statusEl.textContent = '1点目: 指を置いて照準を合わせ、離して確定';
+    statusEl.textContent = '1点目の位置をタップしてください（その後ドラッグで微調整→「確定」）';
     redraw();
   };
   $('pm-add-ref').addEventListener('click', () => startSegment('reference'));
@@ -403,7 +467,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
   $('pm-add-a4').addEventListener('click', () => {
     mode = 'a4';
     pending = [];
-    statusEl.textContent = 'A4の角を順にたどって指定（0/4）';
+    statusEl.textContent = 'A4の1つ目の角をタップしてください（その後ドラッグで微調整→「確定」）。角は辺に沿って順に';
     redraw();
   });
   $('pm-clear').addEventListener('click', () => {
@@ -412,13 +476,8 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     w.segments = [];
     w.target = null;
     pending = [];
+    history = [];
     mode = 'idle';
-    redraw();
-  });
-  $('pm-edit').addEventListener('click', () => {
-    mode = mode === 'edit' ? 'idle' : 'edit';
-    pending = [];
-    statusEl.textContent = mode === 'edit' ? '微調整: 動かしたい点の下（指の上にオフセット分）に指を置いてドラッグ' : '';
     redraw();
   });
   $('pm-guide').addEventListener('change', redraw);
