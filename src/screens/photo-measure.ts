@@ -21,7 +21,7 @@ interface Segment {
 
 interface PhotoWork {
   segments: Segment[];
-  target: { corners: Vec2[]; firstEdgeMm: number; secondEdgeMm: number } | null;
+  target: { corners: Vec2[] } | null;
   rotationDeg: number;
   focal35mm: number;
 }
@@ -51,7 +51,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
         <button type="button" id="pm-add-ref">基準の線分を追加（2点）</button>
         <button type="button" id="pm-add-measure">測定の線分を追加（2点）</button>
         <button type="button" id="pm-add-a4">A4の4隅を指定</button>
-        <label>A4の最初の辺 <select id="pm-a4edge"><option value="long">長辺(297)</option><option value="short">短辺(210)</option></select></label>
+        <label>A4の最初の辺 <select id="pm-a4edge"><option value="auto">自動（画像上で長い辺=長辺）</option><option value="long">長辺(297)</option><option value="short">短辺(210)</option></select></label>
         <button type="button" id="pm-clear">この写真の指定を全消去</button>
       </div>
       <p id="pm-status" class="note"></p>
@@ -171,6 +171,15 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     renderTable();
   }
 
+  /** 4隅の最初の辺(角1→角2)に割り当てるA4の辺の長さ(mm)。自動は画像上で長い方を長辺とみなす。 */
+  function a4Edges(corners: Vec2[]): { first: number; second: number } {
+    const mode = $<HTMLSelectElement>('pm-a4edge').value;
+    const e1 = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
+    const e2 = Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y);
+    const firstIsLong = mode === 'long' || (mode === 'auto' && e1 >= e2);
+    return firstIsLong ? { first: A4.long, second: A4.short } : { first: A4.short, second: A4.long };
+  }
+
   const fmt = (m: number | null) => (m === null ? '—' : `${m.toFixed(3)}m`);
   const errText = (value: number | null, known: number | null) =>
     value === null || known === null
@@ -192,9 +201,9 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     const rows = w.segments
       .map((s, i) => {
         const a = units[i] !== null && scaleK !== null ? units[i]! * scaleK : null;
-        const b = w.target
-          ? planeDistanceViaTarget(w.target.corners, w.target.firstEdgeMm, w.target.secondEdgeMm, s.p1, s.p2)
-          : null;
+        const edges = w.target ? a4Edges(w.target.corners) : null;
+        const b =
+          w.target && edges ? planeDistanceViaTarget(w.target.corners, edges.first, edges.second, s.p1, s.p2) : null;
         const bm = b === null ? null : b / 1000;
         return `<tr>
           <td>${i + 1}</td>
@@ -217,7 +226,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
         ? `仰角${current!.tilt.elevationDeg.toFixed(1)}° ロール${current!.tilt.rollDeg.toFixed(1)}° 回転${w.rotationDeg}°`
         : 'なし') +
       ` / 方式Aの縮尺: ${scaleK === null ? '基準（実測入力済みの線分）が必要' : `基準${scaleSamples.length}本から算出`}` +
-      ` / A4: ${w.target ? '指定済み' : '未指定'}`;
+      ` / A4: ${w.target ? `指定済み(最初の辺=${a4Edges(w.target.corners).first}mm)` : '未指定'}`;
 
     container.querySelectorAll<HTMLInputElement>('.pm-known').forEach((input) => {
       input.addEventListener('change', () => {
@@ -248,8 +257,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       mode = 'idle';
       statusEl.textContent = '';
     } else if (mode === 'a4' && pending.length === 4) {
-      const first = $<HTMLSelectElement>('pm-a4edge').value === 'long' ? A4.long : A4.short;
-      w.target = { corners: pending, firstEdgeMm: first, secondEdgeMm: first === A4.long ? A4.short : A4.long };
+      w.target = { corners: pending };
       pending = [];
       mode = 'idle';
       statusEl.textContent = '';
@@ -284,6 +292,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     redraw();
   });
   $('pm-guide').addEventListener('change', redraw);
+  $('pm-a4edge').addEventListener('change', redraw);
   $<HTMLSelectElement>('pm-rot').addEventListener('change', (e) => {
     const w = work();
     if (w) w.rotationDeg = Number.parseInt((e.target as HTMLSelectElement).value, 10);
