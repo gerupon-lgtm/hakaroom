@@ -1,12 +1,16 @@
 import {
   estimateFocal35mm,
+  estimateFocalFromVerticals,
   focalPxFrom35mm,
   groundDistanceUnits,
   planeDistanceViaTarget,
+  tiltFromUp,
+  upVectorFromVerticals,
   upVectorInCamera,
   verticalGuide,
   type CameraModel,
   type Vec2,
+  type Vec3,
 } from '../photo/rectify';
 import { listPhotos } from '../storage/photo-store';
 import type { PhotoRecord } from '../types';
@@ -22,6 +26,8 @@ interface Segment {
 interface PhotoWork {
   segments: Segment[];
   target: { corners: Vec2[] } | null;
+  /** 鉛直な線（柱・戸の縁など）2本。センサーを使わずに傾きを求める。 */
+  verticals: { p1: Vec2; p2: Vec2 }[];
   rotationDeg: number;
   focal35mm: number;
 }
@@ -32,6 +38,7 @@ const A4 = { long: 297, short: 210 };
 /**
  * 技術検証D 第2段階: 保存した写真の上で辺を指定し、
  *  方式A（傾きセンサー＋焦点距離＋基準の既知長で縮尺）と
+ *  方式A 縦線（写真に写った縦線2本から傾きを求める。センサー不要）と
  *  方式B（A4の4隅によるホモグラフィ）の寸法を出して、実測値との誤差を並べて見る。
  * 合否は付けず、誤差(cm・%)をそのまま出す。
  */
@@ -45,12 +52,14 @@ export function renderPhotoMeasure(container: HTMLElement): void {
         <label>画像の回転 <select id="pm-rot"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></select></label>
         <label>焦点距離(35mm換算) <input id="pm-focal" type="text" inputmode="decimal" /></label>
         <button type="button" id="pm-fit">基準2本以上から焦点距離を推定</button>
+        <button type="button" id="pm-fit-vert">縦線とセンサーから焦点距離を推定</button>
         <label><input id="pm-guide" type="checkbox" checked /> 鉛直ガイド線</label>
       </div>
       <div class="photo-actions">
         <button type="button" id="pm-add-ref">基準の線分を追加（2点）</button>
         <button type="button" id="pm-add-measure">測定の線分を追加（2点）</button>
         <button type="button" id="pm-add-a4">A4の4隅を指定</button>
+        <button type="button" id="pm-add-vert">縦線2本を指定（柱など）</button>
         <label>A4の最初の辺 <select id="pm-a4edge"><option value="auto">自動（画像上で長い辺=長辺）</option><option value="long">長辺(297)</option><option value="short">短辺(210)</option></select></label>
         <button type="button" id="pm-undo">直前を取り消す</button>
         <button type="button" id="pm-clear">この写真の指定を全消去</button>
@@ -82,11 +91,11 @@ export function renderPhotoMeasure(container: HTMLElement): void {
   let photos: PhotoRecord[] = [];
   let current: PhotoRecord | null = null;
   let bitmap: ImageBitmap | null = null;
-  let mode: 'idle' | 'segment' | 'a4' = 'idle';
+  let mode: 'idle' | 'segment' | 'a4' | 'vertical' = 'idle';
   /** 仮置き中の照準位置(画像座標)。確定または取消までは点として扱わない。 */
   let aim: Vec2 | null = null;
   let editHandle: { get(): Vec2; set(p: Vec2): void } | null = null;
-  let history: ('segment' | 'a4')[] = [];
+  let history: ('segment' | 'a4' | 'vertical')[] = [];
   let pendingRole: Segment['role'] = 'measure';
   let pending: Vec2[] = [];
 
@@ -104,6 +113,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       works.set(current.id, {
         segments: [],
         target: null,
+        verticals: [],
         rotationDeg: defaultRotation(current),
         focal35mm: current.focalLength35mm ?? 26,
       });
@@ -115,11 +125,13 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     pending = [];
     history = [];
     aim = null;
-    statusEl.textContent = current.tilt ? '' : 'この写真は傾きセンサー値が無いため、方式A（傾き補正）は使えません（方式BのA4のみ）';
+    statusEl.textContent = current.tilt
+      ? ''
+      : 'この写真は傾きセンサー値が無いため、方式A（センサー）は使えません（縦線2本の方式と、方式BのA4は使えます）';
     redraw();
   }
 
-  function camera(): { cam: CameraModel; up: ReturnType<typeof upVectorInCamera> | null } | null {
+  function camera(): { cam: CameraModel; up: Vec3 | null; verticalUp: Vec3 | null } | null {
     const w = work();
     if (!current || !w) return null;
     const cam: CameraModel = {
@@ -128,7 +140,8 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       focalPx: focalPxFrom35mm(w.focal35mm, current.width, current.height),
     };
     const up = current.tilt ? upVectorInCamera(current.tilt.elevationDeg, current.tilt.rollDeg, w.rotationDeg) : null;
-    return { cam, up };
+    const verticalUp = w.verticals.length === 2 ? upVectorFromVerticals(w.verticals, cam) : null;
+    return { cam, up, verticalUp };
   }
 
   function redraw(): void {
@@ -140,9 +153,15 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     ctx.drawImage(bitmap, 0, 0, current.width, current.height);
     const c = camera()!;
 
-    if ($<HTMLInputElement>('pm-guide').checked && c.up) {
-      const g = verticalGuide(c.cam, c.up);
-      ctx.strokeStyle = 'rgba(255, 200, 0, 0.7)';
+    // 鉛直ガイド線: 黄=センサー、水色=縦線2本から求めた傾き
+    const guides: [Vec3 | null, string][] = [
+      [c.up, 'rgba(255, 200, 0, 0.7)'],
+      [c.verticalUp, 'rgba(0, 229, 255, 0.7)'],
+    ];
+    for (const [guideUp, color] of guides) {
+      if (!$<HTMLInputElement>('pm-guide').checked || !guideUp) continue;
+      const g = verticalGuide(c.cam, guideUp);
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       for (const fx of [0.15, 0.35, 0.5, 0.65, 0.85]) {
         for (const fy of [0.3, 0.7]) {
@@ -164,6 +183,16 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     }
 
     ctx.lineWidth = 3;
+    ctx.font = `${Math.round(current.width / 30)}px sans-serif`;
+    w.verticals.forEach((v, i) => {
+      ctx.strokeStyle = '#ff9100';
+      ctx.fillStyle = '#ff9100';
+      ctx.beginPath();
+      ctx.moveTo(v.p1.x, v.p1.y);
+      ctx.lineTo(v.p2.x, v.p2.y);
+      ctx.stroke();
+      ctx.fillText(`縦${i + 1}`, v.p1.x + 6, v.p1.y - 6);
+    });
     if (w.target) {
       ctx.strokeStyle = '#00e5ff';
       ctx.beginPath();
@@ -221,16 +250,22 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     const c = camera();
     if (!w || !c) return;
 
-    // 方式A: 各線分の平面距離(カメラ高さ=1の単位)と、基準線分から求めた縮尺
-    const units = w.segments.map((s) => (c.up ? groundDistanceUnits(s.p1, s.p2, c.cam, c.up) : null));
-    const scaleSamples = w.segments
-      .map((s, i) => (s.role === 'reference' && s.knownM && units[i] ? s.knownM / units[i]! : null))
-      .filter((k): k is number => k !== null);
-    const scaleK = scaleSamples.length ? Math.exp(scaleSamples.reduce((a, k) => a + Math.log(k), 0) / scaleSamples.length) : null;
+    // 方式A: 各線分の平面距離(カメラ高さ=1の単位)と、基準線分から求めた縮尺。上向きの出どころ別に計算する
+    const methodA = (up: Vec3 | null) => {
+      const units = w.segments.map((s) => (up ? groundDistanceUnits(s.p1, s.p2, c.cam, up) : null));
+      const samples = w.segments
+        .map((s, i) => (s.role === 'reference' && s.knownM && units[i] ? s.knownM / units[i]! : null))
+        .filter((k): k is number => k !== null);
+      const k = samples.length ? Math.exp(samples.reduce((a, x) => a + Math.log(x), 0) / samples.length) : null;
+      return { values: units.map((u) => (u !== null && k !== null ? u * k : null)), refCount: samples.length };
+    };
+    const bySensor = methodA(c.up);
+    const byVerticals = methodA(c.verticalUp);
 
     const rows = w.segments
       .map((s, i) => {
-        const a = units[i] !== null && scaleK !== null ? units[i]! * scaleK : null;
+        const a = bySensor.values[i];
+        const av = byVerticals.values[i];
         const edges = w.target ? a4Edges(w.target.corners) : null;
         const b =
           w.target && edges ? planeDistanceViaTarget(w.target.corners, edges.first, edges.second, s.p1, s.p2) : null;
@@ -240,6 +275,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
           <td><select data-i="${i}" class="pm-role"><option value="measure"${s.role === 'measure' ? ' selected' : ''}>測定</option><option value="reference"${s.role === 'reference' ? ' selected' : ''}>基準</option></select></td>
           <td><input data-i="${i}" class="pm-known" type="text" inputmode="decimal" value="${s.knownM ?? ''}" placeholder="実測m" /></td>
           <td>${fmt(a)}${errText(a, s.knownM)}</td>
+          <td>${fmt(av)}${errText(av, s.knownM)}</td>
           <td>${fmt(bm)}${errText(bm, s.knownM)}</td>
           <td><button data-i="${i}" class="pm-del" type="button">削除</button></td>
         </tr>`;
@@ -247,15 +283,23 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       .join('');
     $('pm-table').innerHTML = `
       <table class="trial-table">
-        <thead><tr><th>#</th><th>種別</th><th>実測(m)</th><th>方式A 傾き補正</th><th>方式B A4</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>種別</th><th>実測(m)</th><th>方式A センサー</th><th>方式A 縦線</th><th>方式B A4</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
+    const tiltText = (up: Vec3 | null) => {
+      if (!up) return 'なし';
+      const t = tiltFromUp(up);
+      return `仰角${t.elevationDeg.toFixed(1)}° 画像の傾き${t.imageRollDeg.toFixed(1)}°`;
+    };
+    const verticalText =
+      w.verticals.length !== 2 ? '未指定' : c.verticalUp ? tiltText(c.verticalUp) : '2本が同じ向きで求められません';
+    const refCount = Math.max(bySensor.refCount, byVerticals.refCount);
     $('pm-info').textContent =
-      `写真 ${current!.width}×${current!.height} / f=${w.focal35mm}mm(35mm換算) / 傾き ` +
-      (current!.tilt
-        ? `仰角${current!.tilt.elevationDeg.toFixed(1)}° ロール${current!.tilt.rollDeg.toFixed(1)}° 回転${w.rotationDeg}°`
-        : 'なし') +
-      ` / 方式Aの縮尺: ${scaleK === null ? '基準（実測入力済みの線分）が必要' : `基準${scaleSamples.length}本から算出`}` +
+      `写真 ${current!.width}×${current!.height} / f=${w.focal35mm}mm(35mm換算)` +
+      ` / 傾き(センサー): ${tiltText(c.up)}` +
+      (current!.tilt ? `（ロール${current!.tilt.rollDeg.toFixed(1)}° 回転${w.rotationDeg}°）` : '') +
+      ` / 傾き(縦線): ${verticalText}` +
+      ` / 方式Aの縮尺: ${refCount === 0 ? '基準（実測入力済みの線分）が必要' : `基準${refCount}本から算出`}` +
       ` / A4: ${w.target ? `指定済み(最初の辺=${a4Edges(w.target.corners).first}mm)` : '未指定'}`;
 
     container.querySelectorAll<HTMLInputElement>('.pm-known').forEach((input) => {
@@ -328,6 +372,9 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     for (const seg of w.segments) {
       list.push({ get: () => seg.p1, set: (p) => (seg.p1 = p) }, { get: () => seg.p2, set: (p) => (seg.p2 = p) });
     }
+    for (const v of w.verticals) {
+      list.push({ get: () => v.p1, set: (p) => (v.p1 = p) }, { get: () => v.p2, set: (p) => (v.p2 = p) });
+    }
     if (w.target) {
       const t = w.target;
       t.corners.forEach((_, i) => list.push({ get: () => t.corners[i], set: (p) => (t.corners[i] = p) }));
@@ -378,6 +425,17 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       pending = [];
       mode = 'idle';
       statusEl.textContent = '';
+    } else if (mode === 'vertical' && pending.length === 4) {
+      w.verticals = [
+        { p1: pending[0], p2: pending[1] },
+        { p1: pending[2], p2: pending[3] },
+      ];
+      history.push('vertical');
+      pending = [];
+      mode = 'idle';
+      statusEl.textContent = '';
+    } else if (mode === 'vertical') {
+      statusEl.textContent = `縦線${pending.length < 2 ? 1 : 2}の${pending.length % 2 === 0 ? '上端' : '下端'}をタップ（${pending.length}/4）`;
     } else {
       statusEl.textContent =
         mode === 'a4' ? `A4の角を順にたどって指定（${pending.length}/4）。次の角をタップ` : '2点目の位置をタップしてください';
@@ -390,7 +448,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     const rect = canvas.getBoundingClientRect();
     const k = cssScale();
     const at = { x: (event.clientX - rect.left) * k, y: (event.clientY - rect.top) * k };
-    if (mode === 'segment' || mode === 'a4') {
+    if (mode === 'segment' || mode === 'a4' || mode === 'vertical') {
       beginTentative(at, () => commitPending(aim!), () => undefined);
       statusEl.textContent = 'ドラッグで微調整し、「確定」を押してください';
     } else {
@@ -457,6 +515,7 @@ export function renderPhotoMeasure(container: HTMLElement): void {
       const last = history.pop();
       if (last === 'segment') w.segments.pop();
       else if (last === 'a4') w.target = null;
+      else if (last === 'vertical') w.verticals = [];
     }
     redraw();
   });
@@ -476,11 +535,37 @@ export function renderPhotoMeasure(container: HTMLElement): void {
     statusEl.textContent = 'A4の1つ目の角をタップしてください（その後ドラッグで微調整→「確定」）。角は辺に沿って順に';
     redraw();
   });
+  $('pm-add-vert').addEventListener('click', () => {
+    mode = 'vertical';
+    pending = [];
+    statusEl.textContent =
+      '縦線1の上端をタップしてください。柱・戸の縁など、まっすぐ縦に立つ線を、左右に離れた2本、なるべく長く指定します';
+    redraw();
+  });
+  $('pm-fit-vert').addEventListener('click', () => {
+    const w = work();
+    const c = camera();
+    if (!w || !c || !current) return;
+    if (!c.up || w.verticals.length !== 2) {
+      statusEl.textContent = '傾きセンサー値のある写真で、縦線2本を指定してください';
+      return;
+    }
+    const result = estimateFocalFromVerticals(w.verticals, { widthPx: current.width, heightPx: current.height }, c.up);
+    if (!result) {
+      statusEl.textContent = '縦線2本が同じ向きのため推定できません。左右に離れた線を指定してください';
+      return;
+    }
+    w.focal35mm = Math.round(result.focal35mm * 10) / 10;
+    $<HTMLInputElement>('pm-focal').value = String(w.focal35mm);
+    statusEl.textContent = `焦点距離を ${w.focal35mm}mm と推定（縦線とセンサーの向きの差 ${result.angleDeg.toFixed(2)}°）`;
+    redraw();
+  });
   $('pm-clear').addEventListener('click', () => {
     const w = work();
     if (!w) return;
     w.segments = [];
     w.target = null;
+    w.verticals = [];
     pending = [];
     history = [];
     mode = 'idle';

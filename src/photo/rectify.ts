@@ -60,6 +60,50 @@ export function upVectorInCamera(elevationDeg: number, rollDeg: number, rotation
   return { x: x0 * Math.cos(t) - y0 * Math.sin(t), y: x0 * Math.sin(t) + y0 * Math.cos(t), z: z0 };
 }
 
+/**
+ * 写真に写った鉛直な線（柱・戸の縁など）2本から、カメラ座標系での上向きベクトルを求める（センサー不要）。
+ * 各線と光学中心が張る平面の法線の外積が、鉛直方向（鉛直の消失点の方向）になる。焦点距離には依存する。
+ * 符号は画像の上側(-y)を向くように選ぶ。2本が画像上でほぼ同じ線ならnull。
+ */
+export function upVectorFromVerticals(lines: { p1: Vec2; p2: Vec2 }[], cam: CameraModel): Vec3 | null {
+  if (lines.length !== 2) return null;
+  const normals = lines.map((l) => normalize(cross(pixelRay(l.p1, cam), pixelRay(l.p2, cam))));
+  const dir = cross(normals[0], normals[1]);
+  if (norm(dir) < 1e-6) return null;
+  const up = normalize(dir);
+  return up.y > 0 ? scale(up, -1) : up;
+}
+
+/**
+ * 焦点距離(35mm換算)を、縦線2本から求めた上向きがセンサーの上向きと一致するように格子探索で選ぶ。
+ * 既知長を使わずに焦点距離を合わせられる。angleDegは最良時の2つの上向きのなす角。
+ */
+export function estimateFocalFromVerticals(
+  lines: { p1: Vec2; p2: Vec2 }[],
+  size: { widthPx: number; heightPx: number },
+  sensorUp: Vec3,
+  range = { min: 12, max: 80, step: 0.1 },
+): { focal35mm: number; angleDeg: number } | null {
+  let best: { focal35mm: number; angleDeg: number } | null = null;
+  for (let f = range.min; f <= range.max + 1e-9; f += range.step) {
+    const cam = { ...size, focalPx: focalPxFrom35mm(f, size.widthPx, size.heightPx) };
+    const v = upVectorFromVerticals(lines, cam);
+    if (!v) return null;
+    const angleDeg = (Math.acos(Math.min(1, dot(v, normalize(sensorUp)))) * 180) / Math.PI;
+    if (!best || angleDeg < best.angleDeg) best = { focal35mm: f, angleDeg };
+  }
+  return best;
+}
+
+/** 上向きベクトルを、光軸の仰角（水平=0、真下=-90）と画像の傾き（正立=0）の角度(度)に直す。 */
+export function tiltFromUp(up: Vec3): { elevationDeg: number; imageRollDeg: number } {
+  const u = normalize(up);
+  return {
+    elevationDeg: (Math.asin(Math.min(1, Math.max(-1, u.z))) * 180) / Math.PI,
+    imageRollDeg: (Math.atan2(u.x, -u.y) * 180) / Math.PI,
+  };
+}
+
 /** 画素→カメラ座標系の視線ベクトル(z=1)。主点は画像中心と仮定する。 */
 export function pixelRay(p: Vec2, cam: CameraModel): Vec3 {
   return { x: (p.x - cam.widthPx / 2) / cam.focalPx, y: (p.y - cam.heightPx / 2) / cam.focalPx, z: 1 };

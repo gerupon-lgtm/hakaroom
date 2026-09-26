@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   applyHomography,
   estimateFocal35mm,
+  estimateFocalFromVerticals,
   focalPxFrom35mm,
   groundDistanceUnits,
   homographyFrom4,
   pixelRay,
   planeDistanceViaTarget,
   projectToGroundPlane,
+  tiltFromUp,
+  upVectorFromVerticals,
   upVectorInCamera,
   verticalGuide,
   type CameraModel,
@@ -153,5 +156,61 @@ describe('verticalGuide', () => {
 describe('pixelRay', () => {
   it('画像中心は光軸方向', () => {
     expect(pixelRay({ x: 600, y: 800 }, cam)).toEqual({ x: 0, y: 0, z: 1 });
+  });
+});
+
+/** カメラ座標の3D点を画素へ投影する（主点=画像中心）。 */
+function projectCam(p: { x: number; y: number; z: number }, c: CameraModel): Vec2 {
+  return { x: c.widthPx / 2 + (c.focalPx * p.x) / p.z, y: c.heightPx / 2 + (c.focalPx * p.y) / p.z };
+}
+
+/** 上向きupのカメラで、足元点footから高さ1の鉛直な線を撮った画像上の2点。 */
+function verticalLine(foot: { x: number; y: number; z: number }, up: { x: number; y: number; z: number }, c: CameraModel) {
+  return { p1: projectCam(foot, c), p2: projectCam({ x: foot.x + up.x, y: foot.y + up.y, z: foot.z + up.z }, c) };
+}
+
+describe('upVectorFromVerticals', () => {
+  it('合成した縦線2本から、撮影時の上向きを復元する（斜め下・ロールあり）', () => {
+    const truth = upVectorInCamera(-25.7, 4);
+    const lines = [verticalLine({ x: -1, y: 1.2, z: 4 }, truth, cam), verticalLine({ x: 1.5, y: 1.0, z: 5 }, truth, cam)];
+    const up = upVectorFromVerticals(lines, cam)!;
+    expect(up.x).toBeCloseTo(truth.x, 9);
+    expect(up.y).toBeCloseTo(truth.y, 9);
+    expect(up.z).toBeCloseTo(truth.z, 9);
+  });
+
+  it('線をなぞる向き（上→下／下→上）が混ざっても、上向きは画像の上側を向く', () => {
+    const truth = upVectorInCamera(-10, -3);
+    const a = verticalLine({ x: -1, y: 1, z: 4 }, truth, cam);
+    const b = verticalLine({ x: 1, y: 1, z: 3 }, truth, cam);
+    const up = upVectorFromVerticals([a, { p1: b.p2, p2: b.p1 }], cam)!;
+    expect(up.y).toBeCloseTo(truth.y, 9);
+    expect(up.y).toBeLessThan(0);
+  });
+
+  it('同じ線を2回なぞった（平行で区別できない）ときはnull', () => {
+    const truth = upVectorInCamera(-20, 0);
+    const a = verticalLine({ x: -1, y: 1, z: 4 }, truth, cam);
+    expect(upVectorFromVerticals([a, a], cam)).toBeNull();
+  });
+
+  it('tiltFromUp: 求めた上向きを仰角・画像の傾きに戻せる', () => {
+    const t = tiltFromUp(upVectorInCamera(-25.7, 4));
+    expect(t.elevationDeg).toBeCloseTo(-25.7, 9);
+    expect(t.imageRollDeg).toBeCloseTo(4, 9);
+  });
+});
+
+describe('estimateFocalFromVerticals', () => {
+  it('縦線2本とセンサーの上向きから、合成に使った焦点距離を復元する', () => {
+    const truthCam = { ...size, focalPx: focalPxFrom35mm(44, size.widthPx, size.heightPx) };
+    const sensorUp = upVectorInCamera(-25.7, 1);
+    const lines = [
+      verticalLine({ x: -1.2, y: 1.2, z: 3 }, sensorUp, truthCam),
+      verticalLine({ x: 1.4, y: 1.0, z: 3.5 }, sensorUp, truthCam),
+    ];
+    const r = estimateFocalFromVerticals(lines, size, sensorUp)!;
+    expect(r.focal35mm).toBeCloseTo(44, 1);
+    expect(r.angleDeg).toBeLessThan(0.05);
   });
 });
